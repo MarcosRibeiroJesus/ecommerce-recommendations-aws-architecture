@@ -1,0 +1,56 @@
+name: Ephemeral Cloud Teardown (Terraform Destroy)
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Deployment posture environment to tear down'
+        required: true
+        default: 'poc'
+        type: choice
+        options:
+          - poc
+          - dev
+      confirm_destruction:
+        description: 'Type "DESTROY" to confirm complete cloud teardown'
+        required: true
+        type: string
+
+jobs:
+  terraform_destroy:
+    name: Terraform Destruction
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: infra/terraform
+
+    steps:
+      - name: Verify Destruction Confirmation
+        run: |
+          if [ "${{ github.event.inputs.confirm_destruction }}" != "DESTROY" ]; then
+            echo "Destruction confirmation mismatch. Aborting."
+            exit 1
+          fi
+
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: us-east-1
+          role-to-assume: ${{ secrets.AWS_DEPLOYMENT_ROLE_ARN }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.8.0
+
+      - name: Terraform Init
+        run: terraform init
+
+      - name: Terraform Destroy
+        run: |
+          terraform destroy -auto-approve \
+            -var="environment=${{ github.event.inputs.environment }}" \
+            -var="force_destroy=true"
