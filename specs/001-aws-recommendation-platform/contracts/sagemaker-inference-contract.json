@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SageMakerInferenceScoringContract",
+  "description": "JSON schema for Amazon SageMaker Serverless Inference endpoint request and response payloads",
+  "definitions": {
+    "CandidateScoringInput": {
+      "type": "object",
+      "required": ["userId", "candidates"],
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "Identifier of the target user",
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "sessionContext": {
+          "type": "object",
+          "properties": {
+            "recentItemIds": {
+              "type": "array",
+              "items": { "type": "string" }
+            },
+            "deviceType": {
+              "type": "string",
+              "enum": ["mobile", "desktop", "tablet"]
+            }
+          }
+        },
+        "candidates": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 100,
+          "items": {
+            "type": "object",
+            "required": ["itemId", "initialScore", "provenance"],
+            "properties": {
+              "itemId": { "type": "string" },
+              "initialScore": { "type": "number", "minimum": 0.0, "maximum": 1.0 },
+              "provenance": { "type": "string", "enum": ["batch", "realtime", "hybrid"] },
+              "category": { "type": "string" },
+              "priceCents": { "type": "integer", "minimum": 0 }
+            }
+          }
+        }
+      }
+    },
+    "CandidateScoringOutput": {
+      "type": "object",
+      "required": ["modelId", "predictions"],
+      "properties": {
+        "modelId": {
+          "type": "string",
+          "example": "reranker-gbdt-v2.1"
+        },
+        "predictions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["itemId", "score"],
+            "properties": {
+              "itemId": { "type": "string" },
+              "score": {
+                "type": "number",
+                "minimum": 0.0,
+                "maximum": 1.0,
+                "description": "Calibrated predicted relevance probability"
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

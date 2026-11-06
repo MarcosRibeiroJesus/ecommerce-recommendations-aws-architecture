@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "DynamoDBBatchRecommendationsContract",
+  "description": "JSON schema for Amazon DynamoDB user_recommendations table items",
+  "type": "object",
+  "required": ["userId", "generatedAt", "ttlTimestamp", "recommendations"],
+  "properties": {
+    "userId": {
+      "type": "string",
+      "description": "Partition Key: Unique user identifier",
+      "pattern": "^[a-zA-Z0-9_\\-]+$"
+    },
+    "generatedAt": {
+      "type": "integer",
+      "description": "Epoch timestamp (seconds) when batch recommendations were computed",
+      "minimum": 0
+    },
+    "ttlTimestamp": {
+      "type": "integer",
+      "description": "Epoch timestamp (seconds) when DynamoDB automatically purges the item (TTL)",
+      "minimum": 0
+    },
+    "recommendations": {
+      "type": "array",
+      "description": "Ordered array of Top-50 precomputed batch recommendations",
+      "minItems": 1,
+      "maxItems": 50,
+      "items": {
+        "type": "object",
+        "required": ["itemId", "score", "rank"],
+        "properties": {
+          "itemId": {
+            "type": "string",
+            "description": "Canonical product SKU identifier"
+          },
+          "score": {
+            "type": "number",
+            "minimum": 0.0,
+            "maximum": 1.0,
+            "description": "Normalized collaborative filtering affinity score"
+          },
+          "rank": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 50,
+            "description": "Rank position in batch candidate generation"
+          },
+          "modelId": {
+            "type": "string",
+            "description": "Version identifier of the batch collaborative filtering model"
+          }
+        }
+      }
+    }
+  }
+}
