@@ -1,0 +1,59 @@
+name: Ephemeral Cloud Provision (Terraform Create)
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Deployment posture environment'
+        required: true
+        default: 'poc'
+        type: choice
+        options:
+          - poc
+          - dev
+      enable_serverless_inference:
+        description: 'Deploy SageMaker Serverless Inference ($0 idle cost)'
+        required: true
+        default: true
+        type: boolean
+      enable_mwaa:
+        description: 'Enable MWAA Environment (High Cost: 71.2% / $447.90/mo baseline)'
+        required: true
+        default: false
+        type: boolean
+
+jobs:
+  terraform_apply:
+    name: Terraform Provisioning
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: infra/terraform
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: us-east-1
+          role-to-assume: ${{ secrets.AWS_DEPLOYMENT_ROLE_ARN }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.8.0
+
+      - name: Terraform Init
+        run: terraform init
+
+      - name: Terraform Validate
+        run: terraform validate
+
+      - name: Terraform Plan & Apply
+        run: |
+          terraform apply -auto-approve \
+            -var="environment=${{ github.event.inputs.environment }}" \
+            -var="enable_serverless_inference=${{ github.event.inputs.enable_serverless_inference }}" \
+            -var="force_destroy=true"
