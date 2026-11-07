@@ -16,6 +16,10 @@ on:
         required: true
         type: string
 
+permissions:
+  id-token: write
+  contents: read
+
 jobs:
   terraform_destroy:
     name: Terraform Destruction
@@ -35,11 +39,20 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Configure AWS Credentials
+      - name: Configure AWS Credentials (OIDC Role)
+        if: ${{ secrets.AWS_ROLE_ARN != '' }}
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          aws-region: us-east-1
-          role-to-assume: ${{ secrets.AWS_DEPLOYMENT_ROLE_ARN }}
+          aws-region: ${{ secrets.AWS_REGION || 'us-east-1' }}
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+
+      - name: Configure AWS Credentials (IAM Access Keys)
+        if: ${{ secrets.AWS_ROLE_ARN == '' && secrets.AWS_ACCESS_KEY_ID != '' }}
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ${{ secrets.AWS_REGION || 'us-east-1' }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
@@ -52,5 +65,7 @@ jobs:
       - name: Terraform Destroy
         run: |
           terraform destroy -auto-approve \
+            -var="aws_region=${{ secrets.AWS_REGION || 'us-east-1' }}" \
+            -var="project_name=${{ vars.PROJECT_NAME || 'ecommerce-recommendations' }}" \
             -var="environment=${{ github.event.inputs.environment }}" \
             -var="force_destroy=true"

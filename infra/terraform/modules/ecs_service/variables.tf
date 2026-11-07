@@ -38,6 +38,12 @@ variable "dynamodb_table_name" {
   description = "DynamoDB table name"
 }
 
+variable "dynamodb_table_arn" {
+  type        = string
+  default     = ""
+  description = "DynamoDB table ARN for least-privilege IAM scoping"
+}
+
 variable "memorydb_cluster_endpoint" {
   type        = string
   description = "MemoryDB cluster endpoint"
@@ -48,8 +54,14 @@ variable "sagemaker_endpoint_name" {
   description = "SageMaker endpoint name"
 }
 
+variable "sagemaker_endpoint_arn" {
+  type        = string
+  default     = ""
+  description = "SageMaker endpoint ARN for least-privilege IAM scoping"
+}
+
 variable "container_image" {
   type        = string
-  default     = "public.ecr.aws/amazonlinux/amazonlinux:latest"
-  description = "Recommendation Service container image"
+  default     = ""
+  description = "Optional custom Recommendation Service container image override; defaults to the provisioned ECR repository URI"
 }
