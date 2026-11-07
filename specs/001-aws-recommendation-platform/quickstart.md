@@ -143,3 +143,22 @@ aws sagemaker list-endpoints --query 'Endpoints[*].EndpointName'
 aws ecs list-tasks --cluster recommendations-poc-cluster
 ```
 *(All commands should return empty arrays).*
+
+---
+
+## 6. GitHub Actions & AWS Repository Secrets Quick Reference
+
+To execute the automated CI/CD and ephemeral Terraform workflows (`.github/workflows/ci.yml`, `terraform-create.yml`, and `terraform-destroy.yml`) directly from GitHub:
+
+1. Configure the following **Repository Secrets** in GitHub (`Settings → Secrets and variables → Actions`):
+   - `AWS_ROLE_ARN` *(Recommended OIDC)* or `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY`
+   - `AWS_REGION` (e.g., `us-east-1`)
+   - `API_AUTH_TOKEN` (Optional API key for `/v1/recommendations` authentication)
+   - `TF_STATE_BUCKET` / `TF_LOCK_TABLE` (Optional if using remote S3 backend)
+2. Configure the following **Repository Variables** (or pass via `workflow_dispatch` inputs):
+   - `PROJECT_NAME` (`ecommerce-recommendations`)
+   - `ENVIRONMENT` (`poc`)
+   - `ENABLE_SERVERLESS_INFERENCE` (`true`)
+   - `ENABLE_MWAA` (`false` by default; `true` for full Airflow DAG runs)
+
+See [`docs/GITHUB_AWS_SETUP.md`](../../docs/GITHUB_AWS_SETUP.md) for the complete step-by-step configuration guide.

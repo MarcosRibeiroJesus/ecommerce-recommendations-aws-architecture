@@ -119,6 +119,55 @@ The research focuses on the optimal runtimes, SDK patterns, connection topologie
 
 ---
 
+### Decision 8: Deterministic Session Vector Derivation from `sessionItemIds` (Audit Remediation C3)
+
+- **Decision**: Implement a deterministic, zero-latency 128-dimensional L2-normalized vector derivation function (`deriveSessionQueryVector(sessionItemIds, userId)`) in `src/serving/src/application/session-embedding.ts`.
+- **Rationale**:
+  - Passing an all-zero `new Float32Array(128)` to MemoryDB `FT.SEARCH` with `DISTANCE_METRIC COSINE` fails to capture session intent and produces undefined cosine distance (`0 / 0`).
+  - By deriving a deterministic 128-dim unit vector from `sessionItemIds` (using SHA-256 seeded PRNG per session item ID, averaging across recent session items, and normalizing to unit length `||v|| = 1.0`, with deterministic fallback to `userId` when `sessionItemIds` is empty), the serving layer produces reproducible, non-zero semantic queries connected to the user's active session without adding an extra network round-trip.
+- **Alternatives Considered**:
+  - *Extra synchronous lookup to MemoryDB (`HGET item:<id> v`) before `FT.SEARCH`*: Adds 3–5ms serial network latency on the critical path; deterministic derivation provides a zero-latency baseline and can optionally average cached item embeddings when present in local LRU cache.
+
+---
+
+### Decision 9: End-to-End Business Rule Enforcement Including Curated Fallback (Audit Remediation C7)
+
+- **Decision**: Register all 4 domain filter rules (`OutOfStockFilterRule`, `RecentPurchaseSuppressionRule`, `CategorySuppressionRule`, `GeoRestrictionRule`) in `BusinessFilterEngine` by default, and pass `CuratedFallbackProvider` candidates through `BusinessFilterEngine.filter()` before returning degraded responses.
+- **Rationale**:
+  - Constitution Principle III & IV mandate that zero ineligible items (out-of-stock, purchased in last 30 days, suppressed category, or geo-restricted) ever leak to end users, even during complete downstream outages.
+  - Filtering the curated fallback pool (and over-provisioning the static curated pool to 50 evergreen items so that after filtering at least `limit` eligible items remain) guarantees 100% compliance across all 5 operational states.
+
+---
+
+### Decision 10: ECR Container Pipeline, Resource-Scoped IAM & MemoryDB TLS/ACL Hardening (Audit Remediation C1, C4, C6)
+
+- **Decision**:
+  1. Provision `aws_ecr_repository` in `infra/terraform/modules/ecs_service/main.tf` and set the default ECS container image to `${aws_ecr_repository.app.repository_url}:${var.image_tag}` instead of `public.ecr.aws/amazonlinux/amazonlinux:latest`.
+  2. Scope IAM policy statements in `ecs_service`, `glue_pipeline`, `sagemaker_training`, and `mwaa_orchestration` to explicit Terraform resource ARNs (`var.dynamodb_table_arn`, `var.sagemaker_endpoint_arn`, `var.s3_bucket_arn`) instead of `Resource = "*"`.
+  3. Enable `tls_enabled = true` and provision a dedicated `aws_memorydb_acl` in `infra/terraform/modules/memorydb_cluster/main.tf`.
+  4. Add configurable `x-api-key` authentication hook in `src/serving/src/presentation/server.ts` so public ALB requests are authenticated when `API_AUTH_TOKEN` is configured.
+- **Rationale**: Eliminates the container deployment gap (`C1`) and addresses the critical security findings (`C6`) while maintaining 100% automated ephemeral reproducibility.
+
+---
+
+### Decision 11: Connected Batch Pipeline, Glue Bookmark Context & Behavioral Python Tests (Audit Remediation C2, C4, C9 & Glue Risks)
+
+- **Decision**:
+  1. Refactor `src/batch/glue/feature_engineering.py` to use `glue_context.create_dynamic_frame.from_catalog(..., transformation_ctx="datasource_interactions")` (so Glue Job Bookmarks track S3 partitions accurately) and `F.broadcast(catalog_df)` (preventing wide-shuffle OOM on 2x `G.1X` workers).
+  2. Declare all 3 Glue jobs (`feature_engineering`, `publish_batch_dynamodb`, `publish_memorydb_vectors`) in `infra/terraform/modules/glue_pipeline/main.tf` and parameterize bucket/table/endpoint names across the Airflow DAG and Python scripts.
+  3. Connect `feature_engineering.py` → `train_model.py` → `publish_dynamodb.py` & `publish_memorydb_vectors.py` so artifacts written by training (`item_embeddings_128dim.json` and `user_recommendations.json`) are read by the publishers, with rate-limited batch writes and TLS support.
+  4. Replace static string-matching tests (`self.assertIn(..., self.script_code)`) in `tests/integration/test_glue_transformations.py` with behavioral execution tests that invoke the transformation/publishing functions and assert output schemas and contracts.
+
+---
+
+### Decision 12: Architecture Diagram Tooling & GitHub Actions AWS Secrets Documentation
+
+- **Decision**:
+  1. Provide a comprehensive **GitHub + AWS Setup & Secrets Guide** (`docs/GITHUB_AWS_SETUP.md`) detailing both IAM OIDC Federation (recommended) and IAM Access Keys, with a complete reference table of all GitHub Repository Secrets and Variables required by `ci.yml`, `terraform-create.yml`, and `terraform-destroy.yml`.
+  2. Generate the **AWS Reference Architecture Diagram** in `docs/ARCHITECTURE_DIAGRAM.md` (and `README.md`) using high-precision **Mermaid** diagrams (`flowchart` + `sequenceDiagram`) modeled directly after the AWS Big Data Blog reference (*"Building a scalable, personalized recommendation system on AWS: From batch to real-time"*), while also documenting how to optionally generate official AWS icon PNG/SVG diagrams via the Python `diagrams` library or `awslabs.aws-diagram-mcp-server`.
+
+---
+
 ## 3. Technology Stack Summary
 
 | Layer | Technology / Tool | Version / SKU | Primary Role |

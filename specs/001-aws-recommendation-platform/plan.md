@@ -205,3 +205,115 @@ A clean monorepo architecture separating the real-time serving application (`src
 | **Minimum-Cost PoC Posture** | Parameterized MWAA ephemeral teardown via Terraform. | Directly targets and eliminates the 71.2% ($447.90/mo) MWAA idle cost without violating the fixed approved architecture. |
 | **Minimum-Cost PoC Posture** | SageMaker Serverless Inference ($0 idle) for MVP. | Replaces 24/7 dedicated `ml.t3.medium` ($39.13/mo), reducing endpoint cost to <$1.00/mo while supporting low-traffic PoC validation. |
 | **Resilience & Fallback** | Hexagonal Architecture for ECS Service. | Allows complete local mocking of DynamoDB, MemoryDB, and SageMaker clients, enabling fast automated verification of all 5 operational fallback edge cases. |
+
+---
+
+## Phase 9: External Audit Remediation, Security Hardening, GitHub Actions Guide & Reference Architecture Plan
+
+### 1. Remediation of Serving Layer (`C3` & `C7`)
+- **Deterministic Session Vector Derivation (`C3`)**:
+  - Implement `deriveSessionQueryVector(sessionItemIds?: string[], userId?: string): Float32Array` in `src/serving/src/application/session-embedding.ts`.
+  - Uses SHA-256 hashing over each `itemId` in `sessionItemIds` (weighted by recency `1 / (idx + 1)`) or falls back to `userId` hash when `sessionItemIds` is empty, producing a deterministic, L2-normalized 128-dimensional `Float32Array` (`||v||₂ = 1.0`).
+  - Replaces the static zero-filled `new Float32Array(128)` in `GetRecommendationsUseCase.execute()`, ensuring valid cosine similarity search in MemoryDB `FT.SEARCH`.
+- **Complete Business Rule Enforcement on All Paths (`C7`)**:
+  - Register all 4 rules (`OutOfStockFilterRule`, `RecentPurchaseSuppressionRule`, `CategorySuppressionRule`, `GeoRestrictionRule`) in `GetRecommendationsUseCase` default `BusinessFilterEngine`.
+  - Apply `BusinessFilterEngine.filter()` to the items returned by `CuratedFallbackProvider` before constructing `RecommendedItem[]`, ensuring degraded/fallback responses never leak out-of-stock, recently purchased (30 days), category-suppressed, or geo-restricted items.
+
+### 2. Remediation of Terraform Infrastructure & Security (`C1`, `C4`, `C6`, `C8`)
+- **ECR Repository & Container Image Wiring (`C1`)**:
+  - Add `aws_ecr_repository` (`${var.project_name}-${var.environment}-serving`) with `force_delete = true` and image scanning enabled in `infra/terraform/modules/ecs_service/main.tf`.
+  - Default `container_image` to `${aws_ecr_repository.app.repository_url}:latest` instead of `public.ecr.aws/amazonlinux/amazonlinux:latest`, and add Docker build/push steps to `.github/workflows/terraform-create.yml`.
+- **Complete AWS Glue Module Definitions (`C4`)**:
+  - Declare `aws_s3_object` and `aws_glue_job` resources for `publish_batch_dynamodb` (`publish_dynamodb.py`) and `publish_memorydb_vectors` (`publish_memorydb_vectors.py`) alongside `feature_engineering` in `infra/terraform/modules/glue_pipeline/main.tf`.
+- **Least-Privilege IAM, MemoryDB TLS/ACL & API Authentication (`C6`)**:
+  - Replace wildcard `Resource = "*"` in `infra/terraform/modules/ecs_service/main.tf` and `infra/terraform/modules/glue_pipeline/main.tf` with explicit resource ARNs (`dynamodb_table_arn`, `sagemaker_endpoint_arn`, `s3_bucket_arn`).
+  - Enable `tls_enabled = true` and provision a dedicated `aws_memorydb_acl` in `infra/terraform/modules/memorydb_cluster/main.tf`.
+  - Add configurable `x-api-key` authentication middleware (`API_AUTH_TOKEN`) in `src/serving/src/presentation/server.ts`.
+
+### 3. Remediation of Batch Pipeline & Behavioral Testing (`C2`, `C4`, `C9` & 3 Glue Risks)
+- **Glue Job Bookmark `transformation_ctx` & Broadcast Join (`Glue Risks 1 & 3`)**:
+  - Update `src/batch/glue/feature_engineering.py` to ingest via `glue_context.create_dynamic_frame.from_catalog(..., transformation_ctx="datasource_interactions")` (with fallback to Spark Parquet when catalog is absent) and apply `F.broadcast(catalog_df)` before joining with `interactions_df` to prevent 2-DPU `G.1X` shuffle OOM.
+- **Connected End-to-End Batch Artifact Flow & Parameterized Names (`C2`, `C4`, `Glue Risk 2`)**:
+  - Parameterize bucket, table, and endpoint names via environment variables / CLI arguments across `daily_hybrid_recommendation_pipeline.py`, `feature_engineering.py`, `train_model.py`, `publish_dynamodb.py`, and `publish_memorydb_vectors.py`.
+  - Update `train_model.py` to consume feature weights and output both `item_embeddings_128dim.json` and `user_recommendations.json`, which `publish_memorydb_vectors.py` and `publish_dynamodb.py` read and publish with rate-limited batching and Redis TLS support.
+- **Behavioral Python Test Suite (`C9`)**:
+  - Upgrade `tests/integration/test_glue_transformations.py`, `tests/contract/test_dynamodb_publish_contract.py`, and `tests/contract/test_memorydb_vector_contract.py` to execute the Python transformation, training, and publishing functions against temporary artifacts/mocks rather than only checking source code strings.
+
+### 4. Post-Remediation Security Audit, GitHub Actions AWS Setup Guide & Reference Architecture
+- **Security Audit Report (`docs/SECURITY_AUDIT.md`)**:
+  - Comprehensive verification of IAM least privilege, network isolation, encryption at rest (KMS) and in transit (TLS), API authentication, and secret management.
+- **GitHub + AWS CI/CD Setup & Secrets Guide (`docs/GITHUB_AWS_SETUP.md`)**:
+  - Complete step-by-step guide detailing how to connect any GitHub repository fork to AWS using GitHub Actions and Repository Secrets (supporting both OIDC IAM Role Federation and IAM Access Keys), with a full reference table of every required secret and variable.
+- **Faithful AWS Reference Architecture Diagram (`docs/ARCHITECTURE_DIAGRAM.md`)**:
+  - High-precision Mermaid architecture diagrams (plus optional Python `diagrams` / AWS Diagram MCP instructions) faithfully reflecting the AWS Big Data Blog reference architecture (*"Building a scalable, personalized recommendation system on AWS: From batch to real-time"*):
+
+```mermaid
+flowchart TB
+    subgraph Data_Lake ["1. Data Foundation & Governance (Single Source of Truth)"]
+        direction TB
+        S3[("Amazon S3 Golden Dataset\n• catalog/ (Snappy Parquet)\n• interactions/ (year/month/day)\n• user_features/ & models/")]
+        LF["AWS Lake Formation & Glue Data Catalog\n• ecommerce_golden_db\n• LF-Tags & Column Access Control"]
+        Athena["Amazon Athena (Engine v3)\n• Workgroup: recommendations_analytics\n• Partition Pruning & 10GB Scan Guard"]
+        S3 <--> LF
+        LF --> Athena
+    end
+
+    subgraph Batch_Pipeline ["2. Offline Batch Processing & ML Retraining Layer"]
+        direction TB
+        MWAA["Amazon MWAA (Apache Airflow 2.8)\n• DAG: daily_hybrid_recommendation_pipeline\n• Ephemeral Lifecycle (enable_mwaa)"]
+        GlueETL["AWS Glue 4.0 Feature Engineering\n• PySpark + Job Bookmarks (transformation_ctx)\n• Broadcast Join on 2x G.1X Workers"]
+        SMTrain["Amazon SageMaker Training & Processing\n• Managed Spot Instances (70% savings) + S3 Checkpoints\n• Collaborative Filtering + 128-dim Item Embeddings"]
+        GlueDDB["AWS Glue DynamoDB Publisher\n• BatchWriteItem with Rate Limiting\n• 7-Day TTL (generatedAt + 604800)"]
+        GlueVec["AWS Glue MemoryDB Vector Publisher\n• 128-dim Float32 Binary Packing (512B)\n• TLS + Pipelined HSET into item_idx"]
+
+        MWAA -.->|1. S3KeySensor & AthenaOperator| Athena
+        Athena -->|Curated Views| GlueETL
+        MWAA -.->|2. GlueJobOperator| GlueETL
+        GlueETL -->|Parquet Features| S3
+        S3 -->|Training Input| SMTrain
+        MWAA -.->|3. SageMakerTrainingOperator| SMTrain
+        SMTrain -->|user_recommendations.json| GlueDDB
+        SMTrain -->|item_embeddings_128dim.json| GlueVec
+        MWAA -.->|4. Parallel GlueJobOperators| GlueDDB
+        MWAA -.->|4. Parallel GlueJobOperators| GlueVec
+    end
+
+    subgraph Serving_Stores ["3. Low-Latency Hybrid Serving Stores"]
+        direction TB
+        DDB[("Amazon DynamoDB\n• Table: user_recommendations\n• On-Demand (PAY_PER_REQUEST)\n• PK: userId | TTL: ttlTimestamp")]
+        MDB[("Amazon MemoryDB for Redis 7.1+\n• Single Shard (db.t4g.small) + TLS + ACL\n• HNSW Vector Index: item_idx\n• DIM=128, FLOAT32, COSINE")]
+        GlueDDB -->|Batch Profiles| DDB
+        GlueVec -->|HNSW Vectors| MDB
+    end
+
+    subgraph Realtime_Layer ["4. Real-Time Hybrid Serving & Online Scoring Layer (<60ms P95)"]
+        direction TB
+        Client(["Amazon.com Shopper / Client\nGET /v1/recommendations\n(userId, sessionItemIds, category, limit)"])
+        ALB["AWS Application Load Balancer\n• Public Subnets | Health Check /health"]
+        ECS["Amazon ECS on AWS Fargate Spot\n• Node.js 20 + TypeScript + Fastify\n• Clean Hexagonal Architecture\n• API Key Auth + LRU Cache"]
+        SessionVec["Deterministic Session Vectorizer\n• SHA-256 Recency-Weighted 128-dim Unit Vector\n• Derived from sessionItemIds / userId"]
+        Merger["Candidate Merger & Business Filter Engine\n• Deduplication & Provenance (batch|realtime|hybrid|fallback)\n• OutOfStock, 30d RecentPurchase, Category & Geo Rules"]
+        SMEndpoint["Amazon SageMaker Online Inference\n• Dual-Mode: Serverless (2GB, MaxConcurrency=5) or Provisioned\n• 35ms Circuit Breaker -> Heuristic Reranker (0.6*batch + 0.4*vec)"]
+        Fallback["Curated Evergreen Fallback Provider\n• Filtered by BusinessFilterEngine\n• Guarantees Zero HTTP 500s"]
+
+        Client -->|HTTP/HTTPS + x-api-key| ALB
+        ALB --> ECS
+        ECS --> SessionVec
+        ECS ==>|Parallel GetItem (<5ms)| DDB
+        SessionVec ==>|Parallel FT.SEARCH KNN 50 (<10ms)| MDB
+        DDB --> Merger
+        MDB --> Merger
+        Merger -->|Eligible Candidates| SMEndpoint
+        Merger -.->|If Empty / Full Outage| Fallback
+        SMEndpoint -->|Ranked Top-N (<20ms)| ECS
+        Fallback -.->|Filtered Fallback| ECS
+    end
+
+    subgraph Observability_CICD ["5. Observability & Ephemeral CI/CD Automation"]
+        CW["Amazon CloudWatch\n• Structured Pino JSON Logs (requestId)\n• Stage Latencies & Degradation Alarms"]
+        GHA["GitHub Actions + Terraform >= 1.5\n• ci.yml | terraform-create.yml | terraform-destroy.yml\n• AWS ECR Image Build & Push"]
+        ECS -.->|Metrics & Logs| CW
+        GHA -.->|Provisions & Destroys| Realtime_Layer
+        GHA -.->|Provisions & Destroys| Batch_Pipeline
+    end
+```

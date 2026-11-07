@@ -212,6 +212,19 @@ export interface OnlineScoringRequest {
 }
 ```
 
+#### 5.4 Deterministic Session Query Vector (`SessionEmbedding`)
+- **Purpose**: Guarantees that real-time semantic retrieval (`FT.SEARCH item_idx`) always receives a valid, L2-normalized 128-dimensional `Float32Array` derived deterministically from the user's in-session activity (`sessionItemIds`), eliminating zero-vector (`NaN` cosine distance) defects.
+- **Derivation Algorithm**:
+  1. If `sessionItemIds` is non-empty, each `itemId` is hashed via `SHA-256` to seed a deterministic 128-dimensional float vector in `[-1.0, 1.0]`, weighted by recency (`1 / (index + 1)`).
+  2. If `sessionItemIds` is empty or omitted, `userId` is hashed via `SHA-256` as the deterministic seed so cold-session requests still execute a valid, reproducible semantic KNN query.
+  3. The resulting 128-dimensional vector is L2-normalized (`||v||₂ = 1.0`) and serialized as a 512-byte little-endian `Float32Array` buffer.
+
+#### 5.5 Batch Pipeline Artifact Handoff Contract (`BatchTrainingArtifacts`)
+- **Storage Target**: Amazon S3 (`s3://<project>-<env>-golden-dataset-<account>/models/latest/`) or local staging path (`ARTIFACT_DIR`).
+- **Files**:
+  - `item_embeddings_128dim.json`: Map of `itemId -> float[128]` (L2-normalized) consumed by `publish_memorydb_vectors.py`.
+  - `user_recommendations.json`: Map of `userId -> Array<{ itemId, score, rank, modelId, category, title, priceCents }>` consumed by `publish_dynamodb.py`.
+
 ---
 
 ## 3. State Transitions & Lifecycle
