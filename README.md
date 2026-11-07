@@ -27,41 +27,56 @@ An enterprise-grade, cost-optimized, and resilient **Hybrid Recommendation Platf
 Modeled on [Building a scalable, personalized recommendation system on AWS: From batch to real-time](https://aws.amazon.com/pt/blogs/big-data/building-a-scalable-personalized-recommendation-system-on-aws-from-batch-to-real-time/). See [`docs/ARCHITECTURE_DIAGRAM.md`](docs/ARCHITECTURE_DIAGRAM.md) for the full sequence diagram and component mapping.
 
 ```mermaid
-flowchart TB
-    User(["Amazon.com Shopper\n(userId, sessionItemIds, category, limit)"])
+flowchart TD
+    User(["Amazon.com Shopper - userId, sessionItemIds, category, limit"])
 
-    subgraph Data_Lake ["1. Data Lake & Governance"]
-        S3[("Amazon S3 Golden Dataset\nParquet + Snappy | SSE-KMS")] <--> LF["AWS Lake Formation\n& Glue Data Catalog"]
-        LF --> Athena["Amazon Athena v3\nPartition-Pruned Views"]
+    subgraph Data_Lake ["1. Data Lake and Governance"]
+        S3[("Amazon S3 Golden Dataset - Parquet, Snappy, SSE-KMS")]
+        LF["AWS Lake Formation and Glue Data Catalog"]
+        Athena["Amazon Athena v3 - Partition-Pruned Views"]
+        S3 --> LF
+        LF --> Athena
     end
 
-    subgraph Batch_Layer ["2. Offline Batch & ML Pipeline (MWAA Daily 02:00 UTC)"]
-        MWAA["Amazon MWAA (Airflow)"]
-        Athena --> GlueETL["AWS Glue 4.0: feature-engineering\n(Job Bookmarks + Broadcast Join)"]
-        GlueETL --> SM_Train["Amazon SageMaker Spot Training\n(Two-Tower / CF Model)"]
-        SM_Train -->|user_recommendations.json| GlueDDB["AWS Glue 4.0: publish-dynamodb"]
-        SM_Train -->|item_embeddings_128dim.json| GlueMem["AWS Glue 4.0: publish-memorydb-vectors"]
-        MWAA -.->|Orchestrates| Athena & GlueETL & SM_Train & GlueDDB & GlueMem
+    subgraph Batch_Layer ["2. Offline Batch and ML Pipeline - MWAA Daily 02:00 UTC"]
+        MWAA["Amazon MWAA - Apache Airflow"]
+        GlueETL["AWS Glue 4.0: feature-engineering - Job Bookmarks and Broadcast Join"]
+        SM_Train["Amazon SageMaker Spot Training - Two-Tower and CF Model"]
+        GlueDDB["AWS Glue 4.0: publish-dynamodb"]
+        GlueMem["AWS Glue 4.0: publish-memorydb-vectors"]
+
+        Athena --> GlueETL
+        GlueETL --> SM_Train
+        SM_Train -->|user_recommendations.json| GlueDDB
+        SM_Train -->|item_embeddings_128dim.json| GlueMem
+        MWAA -.->|Orchestrates| Athena
+        MWAA -.->|Orchestrates| GlueETL
+        MWAA -.->|Orchestrates| SM_Train
+        MWAA -.->|Orchestrates| GlueDDB
+        MWAA -.->|Orchestrates| GlueMem
     end
 
-    subgraph Serving_Layer ["3. Real-Time Hybrid Serving Layer (<60ms P95)"]
+    subgraph Serving_Layer ["3. Real-Time Hybrid Serving Layer - Sub-60ms P95"]
         ALB["Application Load Balancer"]
-        ECR["Amazon ECR\n(Fastify Image)"] -.-> ECS["Amazon ECS Fargate Spot\n(Fastify v4 + x-api-key + Circuit Breakers)"]
-        DynamoDB[("Amazon DynamoDB\nuser_recommendations (7d TTL)")]
-        MemoryDB[("Amazon MemoryDB for Redis\nHNSW 128-dim Float32 (TLS + ACL)")]
-        SM_Endpoint["Amazon SageMaker Endpoint\n(Serverless / ml.t3.medium)"]
-        CW["Amazon CloudWatch\nLogs, EMF Metrics & Alarms"]
+        ECR["Amazon ECR - Fastify Container Image"]
+        ECS["Amazon ECS Fargate Spot - Fastify v4, x-api-key, Circuit Breakers"]
+        DynamoDB[("Amazon DynamoDB - user_recommendations, 7d TTL")]
+        MemoryDB[("Amazon MemoryDB for Redis - HNSW 128-dim Float32, TLS and ACL")]
+        SM_Endpoint["Amazon SageMaker Endpoint - Serverless or ml.t3.medium"]
+        CW["Amazon CloudWatch - Logs, EMF Metrics and Alarms"]
     end
 
     GlueDDB -->|Rate-Limited BatchWrite| DynamoDB
     GlueMem -->|Rate-Limited TLS HSET| MemoryDB
-    User ==>|GET /v1/recommendations| ALB ==> ECS
+    ECR -.->|Pulls Image| ECS
+    User -->|GET /v1/recommendations| ALB
+    ALB --> ECS
     ECS -->|1a. Parallel GetItem| DynamoDB
     ECS -->|1b. Deterministic 128-dim Session Vector KNN| MemoryDB
-    ECS -->|2. Merge, Deduplicate & Enforce 4 Business Rules| SM_Endpoint
-    SM_Endpoint -->|3. Online Re-Ranking Scores (or 0.6/0.4 Fallback)| ECS
-    ECS ==>|200 OK Ranked JSON| User
-    ECS -.-> CW
+    ECS -->|2. Merge, Deduplicate and 4 Business Rules| SM_Endpoint
+    SM_Endpoint -->|3. Online Re-Ranking or Heuristic Fallback| ECS
+    ECS -->|200 OK Ranked JSON| User
+    ECS -.->|Telemetry| CW
 ```
 
 ---

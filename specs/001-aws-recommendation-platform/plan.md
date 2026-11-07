@@ -248,25 +248,23 @@ A clean monorepo architecture separating the real-time serving application (`src
   - High-precision Mermaid architecture diagrams (plus optional Python `diagrams` / AWS Diagram MCP instructions) faithfully reflecting the AWS Big Data Blog reference architecture (*"Building a scalable, personalized recommendation system on AWS: From batch to real-time"*):
 
 ```mermaid
-flowchart TB
-    subgraph Data_Lake ["1. Data Foundation & Governance (Single Source of Truth)"]
-        direction TB
-        S3[("Amazon S3 Golden Dataset\n• catalog/ (Snappy Parquet)\n• interactions/ (year/month/day)\n• user_features/ & models/")]
-        LF["AWS Lake Formation & Glue Data Catalog\n• ecommerce_golden_db\n• LF-Tags & Column Access Control"]
-        Athena["Amazon Athena (Engine v3)\n• Workgroup: recommendations_analytics\n• Partition Pruning & 10GB Scan Guard"]
-        S3 <--> LF
+flowchart TD
+    subgraph Data_Lake ["1. Data Foundation and Governance"]
+        S3[("Amazon S3 Golden Dataset - Parquet, Snappy, SSE-KMS")]
+        LF["AWS Lake Formation and Glue Data Catalog - ecommerce_golden_db"]
+        Athena["Amazon Athena Engine v3 - Partition Pruning and 10GB Scan Guard"]
+        S3 --> LF
         LF --> Athena
     end
 
-    subgraph Batch_Pipeline ["2. Offline Batch Processing & ML Retraining Layer"]
-        direction TB
-        MWAA["Amazon MWAA (Apache Airflow 2.8)\n• DAG: daily_hybrid_recommendation_pipeline\n• Ephemeral Lifecycle (enable_mwaa)"]
-        GlueETL["AWS Glue 4.0 Feature Engineering\n• PySpark + Job Bookmarks (transformation_ctx)\n• Broadcast Join on 2x G.1X Workers"]
-        SMTrain["Amazon SageMaker Training & Processing\n• Managed Spot Instances (70% savings) + S3 Checkpoints\n• Collaborative Filtering + 128-dim Item Embeddings"]
-        GlueDDB["AWS Glue DynamoDB Publisher\n• BatchWriteItem with Rate Limiting\n• 7-Day TTL (generatedAt + 604800)"]
-        GlueVec["AWS Glue MemoryDB Vector Publisher\n• 128-dim Float32 Binary Packing (512B)\n• TLS + Pipelined HSET into item_idx"]
+    subgraph Batch_Pipeline ["2. Offline Batch Processing and ML Retraining Layer"]
+        MWAA["Amazon MWAA Apache Airflow 2.8 - daily_hybrid_recommendation_pipeline"]
+        GlueETL["AWS Glue 4.0 Feature Engineering - Job Bookmarks and Broadcast Join"]
+        SMTrain["Amazon SageMaker Managed Spot Training - CF + 128-dim Item Embeddings"]
+        GlueDDB["AWS Glue DynamoDB Publisher - Rate-Limited BatchWrite, 7d TTL"]
+        GlueVec["AWS Glue MemoryDB Vector Publisher - 512B Float32 Vectors over TLS"]
 
-        MWAA -.->|1. S3KeySensor & AthenaOperator| Athena
+        MWAA -.->|1. S3KeySensor and AthenaOperator| Athena
         Athena -->|Curated Views| GlueETL
         MWAA -.->|2. GlueJobOperator| GlueETL
         GlueETL -->|Parquet Features| S3
@@ -274,46 +272,46 @@ flowchart TB
         MWAA -.->|3. SageMakerTrainingOperator| SMTrain
         SMTrain -->|user_recommendations.json| GlueDDB
         SMTrain -->|item_embeddings_128dim.json| GlueVec
-        MWAA -.->|4. Parallel GlueJobOperators| GlueDDB
-        MWAA -.->|4. Parallel GlueJobOperators| GlueVec
+        MWAA -.->|4a. GlueJobOperator| GlueDDB
+        MWAA -.->|4b. GlueJobOperator| GlueVec
     end
 
     subgraph Serving_Stores ["3. Low-Latency Hybrid Serving Stores"]
-        direction TB
-        DDB[("Amazon DynamoDB\n• Table: user_recommendations\n• On-Demand (PAY_PER_REQUEST)\n• PK: userId | TTL: ttlTimestamp")]
-        MDB[("Amazon MemoryDB for Redis 7.1+\n• Single Shard (db.t4g.small) + TLS + ACL\n• HNSW Vector Index: item_idx\n• DIM=128, FLOAT32, COSINE")]
+        DDB[("Amazon DynamoDB - user_recommendations, On-Demand, 7d TTL")]
+        MDB[("Amazon MemoryDB for Redis 7.1 - HNSW item_idx, 128-dim Float32, TLS + ACL")]
         GlueDDB -->|Batch Profiles| DDB
         GlueVec -->|HNSW Vectors| MDB
     end
 
-    subgraph Realtime_Layer ["4. Real-Time Hybrid Serving & Online Scoring Layer (<60ms P95)"]
-        direction TB
-        Client(["Amazon.com Shopper / Client\nGET /v1/recommendations\n(userId, sessionItemIds, category, limit)"])
-        ALB["AWS Application Load Balancer\n• Public Subnets | Health Check /health"]
-        ECS["Amazon ECS on AWS Fargate Spot\n• Node.js 20 + TypeScript + Fastify\n• Clean Hexagonal Architecture\n• API Key Auth + LRU Cache"]
-        SessionVec["Deterministic Session Vectorizer\n• SHA-256 Recency-Weighted 128-dim Unit Vector\n• Derived from sessionItemIds / userId"]
-        Merger["Candidate Merger & Business Filter Engine\n• Deduplication & Provenance (batch|realtime|hybrid|fallback)\n• OutOfStock, 30d RecentPurchase, Category & Geo Rules"]
-        SMEndpoint["Amazon SageMaker Online Inference\n• Dual-Mode: Serverless (2GB, MaxConcurrency=5) or Provisioned\n• 35ms Circuit Breaker -> Heuristic Reranker (0.6*batch + 0.4*vec)"]
-        Fallback["Curated Evergreen Fallback Provider\n• Filtered by BusinessFilterEngine\n• Guarantees Zero HTTP 500s"]
+    subgraph Realtime_Layer ["4. Real-Time Hybrid Serving and Online Scoring Layer"]
+        Client(["Amazon.com Shopper - GET /v1/recommendations"])
+        ALB["AWS Application Load Balancer - Public Subnets"]
+        ECR["Amazon ECR Repository - Fastify Container Image"]
+        ECS["Amazon ECS on AWS Fargate Spot - Fastify v4, x-api-key Auth"]
+        SessionVec["Deterministic Session Vectorizer - SHA-256 128-dim Unit Vector"]
+        Merger["Candidate Merger and Business Filter Engine - 4 Eligibility Rules"]
+        SMEndpoint["Amazon SageMaker Online Inference - Serverless or Provisioned"]
+        Fallback["Curated Evergreen Fallback Provider - Filtered by BusinessFilterEngine"]
 
+        ECR -.->|Pulls Image| ECS
         Client -->|HTTP/HTTPS + x-api-key| ALB
         ALB --> ECS
         ECS --> SessionVec
-        ECS ==>|Parallel GetItem (<5ms)| DDB
-        SessionVec ==>|Parallel FT.SEARCH KNN 50 (<10ms)| MDB
+        ECS -->|Parallel GetItem| DDB
+        SessionVec -->|Parallel FT.SEARCH KNN 20| MDB
         DDB --> Merger
         MDB --> Merger
         Merger -->|Eligible Candidates| SMEndpoint
-        Merger -.->|If Empty / Full Outage| Fallback
-        SMEndpoint -->|Ranked Top-N (<20ms)| ECS
+        Merger -.->|If Empty or Full Outage| Fallback
+        SMEndpoint -->|Ranked Top-N| ECS
         Fallback -.->|Filtered Fallback| ECS
     end
 
-    subgraph Observability_CICD ["5. Observability & Ephemeral CI/CD Automation"]
-        CW["Amazon CloudWatch\n• Structured Pino JSON Logs (requestId)\n• Stage Latencies & Degradation Alarms"]
-        GHA["GitHub Actions + Terraform >= 1.5\n• ci.yml | terraform-create.yml | terraform-destroy.yml\n• AWS ECR Image Build & Push"]
-        ECS -.->|Metrics & Logs| CW
-        GHA -.->|Provisions & Destroys| Realtime_Layer
-        GHA -.->|Provisions & Destroys| Batch_Pipeline
+    subgraph Observability_CICD ["5. Observability and Ephemeral CI/CD Automation"]
+        CW["Amazon CloudWatch - Pino JSON Logs, Metrics and Alarms"]
+        GHA["GitHub Actions + Terraform - ci, terraform-create, terraform-destroy"]
+        ECS -.->|Metrics and Logs| CW
+        GHA -.->|Builds and Pushes| ECR
+        GHA -.->|Provisions and Destroys| ECS
     end
 ```
