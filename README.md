@@ -17,7 +17,60 @@ An enterprise-grade, cost-optimized, and resilient **Hybrid Recommendation Platf
   3. *MemoryDB Outage*: Pure DynamoDB batch recommendations with `provenance: 'batch'`.
   4. *DynamoDB Miss / Cold-Start*: Pure real-time semantic vectors with `provenance: 'realtime'`.
   5. *Catastrophic Outage*: Curated high-seller fallback catalog with `provenance: 'fallback'`.
-- **Strict Business Governance**: 100% suppression of out-of-stock items (`in_stock: false`), products purchased within the last 30 days, restricted categories, and geo restrictions.
+- **Strict Business Governance**: 100% suppression of out-of-stock items (`in_stock: false`), products purchased within the last 30 days, restricted categories, and geo restrictions across both primary and degraded fallback paths.
+- **Deterministic Session Vector Derivation**: Real-time session item signals (`sessionItemIds`) are deterministically projected into 128-dimensional L2-normalized `Float32Array` vectors for low-latency HNSW ANN retrieval in Amazon MemoryDB.
+
+---
+
+## Reference Architecture Diagram (Batch to Real-Time)
+
+Modeled on [Building a scalable, personalized recommendation system on AWS: From batch to real-time](https://aws.amazon.com/pt/blogs/big-data/building-a-scalable-personalized-recommendation-system-on-aws-from-batch-to-real-time/). See [`docs/ARCHITECTURE_DIAGRAM.md`](docs/ARCHITECTURE_DIAGRAM.md) for the full sequence diagram and component mapping.
+
+```mermaid
+flowchart TB
+    User(["Amazon.com Shopper\n(userId, sessionItemIds, category, limit)"])
+
+    subgraph Data_Lake ["1. Data Lake & Governance"]
+        S3[("Amazon S3 Golden Dataset\nParquet + Snappy | SSE-KMS")] <--> LF["AWS Lake Formation\n& Glue Data Catalog"]
+        LF --> Athena["Amazon Athena v3\nPartition-Pruned Views"]
+    end
+
+    subgraph Batch_Layer ["2. Offline Batch & ML Pipeline (MWAA Daily 02:00 UTC)"]
+        MWAA["Amazon MWAA (Airflow)"]
+        Athena --> GlueETL["AWS Glue 4.0: feature-engineering\n(Job Bookmarks + Broadcast Join)"]
+        GlueETL --> SM_Train["Amazon SageMaker Spot Training\n(Two-Tower / CF Model)"]
+        SM_Train -->|user_recommendations.json| GlueDDB["AWS Glue 4.0: publish-dynamodb"]
+        SM_Train -->|item_embeddings_128dim.json| GlueMem["AWS Glue 4.0: publish-memorydb-vectors"]
+        MWAA -.->|Orchestrates| Athena & GlueETL & SM_Train & GlueDDB & GlueMem
+    end
+
+    subgraph Serving_Layer ["3. Real-Time Hybrid Serving Layer (<60ms P95)"]
+        ALB["Application Load Balancer"]
+        ECR["Amazon ECR\n(Fastify Image)"] -.-> ECS["Amazon ECS Fargate Spot\n(Fastify v4 + x-api-key + Circuit Breakers)"]
+        DynamoDB[("Amazon DynamoDB\nuser_recommendations (7d TTL)")]
+        MemoryDB[("Amazon MemoryDB for Redis\nHNSW 128-dim Float32 (TLS + ACL)")]
+        SM_Endpoint["Amazon SageMaker Endpoint\n(Serverless / ml.t3.medium)"]
+        CW["Amazon CloudWatch\nLogs, EMF Metrics & Alarms"]
+    end
+
+    GlueDDB -->|Rate-Limited BatchWrite| DynamoDB
+    GlueMem -->|Rate-Limited TLS HSET| MemoryDB
+    User ==>|GET /v1/recommendations| ALB ==> ECS
+    ECS -->|1a. Parallel GetItem| DynamoDB
+    ECS -->|1b. Deterministic 128-dim Session Vector KNN| MemoryDB
+    ECS -->|2. Merge, Deduplicate & Enforce 4 Business Rules| SM_Endpoint
+    SM_Endpoint -->|3. Online Re-Ranking Scores (or 0.6/0.4 Fallback)| ECS
+    ECS ==>|200 OK Ranked JSON| User
+    ECS -.-> CW
+```
+
+---
+
+## Documentation & Guides
+
+- **[GitHub + AWS CI/CD Setup Guide (`docs/GITHUB_AWS_SETUP.md`)](docs/GITHUB_AWS_SETUP.md)**: Step-by-step instructions to configure AWS OIDC or Access Keys, all required GitHub Repository Secrets & Variables, and how to run the automated `ci.yml`, `terraform-create.yml`, and `terraform-destroy.yml` workflows.
+- **[Post-Implementation Security Audit (`docs/SECURITY_AUDIT.md`)](docs/SECURITY_AUDIT.md)**: Verification of IAM ARN scoping, MemoryDB TLS + ACL, S3 KMS encryption, Lake Formation governance, API authentication (`x-api-key`), and production hardening roadmap.
+- **[Reference Architecture & Sequence Diagrams (`docs/ARCHITECTURE_DIAGRAM.md`)](docs/ARCHITECTURE_DIAGRAM.md)**: Complete Batch-to-Real-Time architectural blueprint and sequence flow aligned with the AWS Big Data reference blog.
 
 ---
 

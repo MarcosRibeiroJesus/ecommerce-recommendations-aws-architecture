@@ -268,3 +268,34 @@ Task: "Implement SageMaker Scoring Client in src/serving/src/infrastructure/sage
 - [X] T066 Format Terraform configurations with `terraform fmt -recursive` across `infra/terraform/` and update deprecated `data.aws_region.current.name` to `region` in `infra/terraform/modules/ecs_service/main.tf` per Constitution V (contradicts)
 - [X] T067 Standardize Airflow DAG validation test naming by consolidating `tests/unit/airflow-dag-validation.test.py` and `tests/unit/test_airflow_dag_validation.py` per T044 and CI discovery configuration (unrequested)
 
+---
+
+## Phase 9: External Audit Remediation, Security Hardening, GitHub Actions AWS Setup & Reference Architecture
+
+**Purpose**: Remediate all external PR #1 review findings (`C1`–`C9`) and AWS Glue integration risks across Serving (Point 1), Terraform & Security (Point 2), and Batch/Testing (Point 3), followed by a comprehensive Security Audit, GitHub Actions + AWS Secrets Setup Guide, and Reference Architecture Diagram (`T068`–`T079`).
+
+### Point 1: Serving Layer Remediation — Deterministic Session Vectors & Complete Eligibility Filtering (`C3`, `C7`)
+
+- [X] T068 [P] [US1] [US3] Write unit tests for deterministic 128-dim L2-normalized vector derivation from `sessionItemIds` (and `userId` fallback) in `tests/unit/session-embedding.test.ts` and update `tests/integration/fallback-complete-outage.test.ts` to assert that `CuratedFallbackProvider` items are filtered by `BusinessFilterEngine`
+- [X] T069 [US1] Implement `deriveSessionQueryVector(sessionItemIds?: string[], userId?: string): Float32Array` using SHA-256 recency-weighted hashing and L2 normalization in `src/serving/src/application/session-embedding.ts` and wire into `GetRecommendationsUseCase.execute()` in `src/serving/src/application/get-recommendations.use-case.ts` (`C3`, `FR-009`, `FR-012`)
+- [X] T070 [US2] [US3] Register all 4 filter rules (`OutOfStockFilterRule`, `RecentPurchaseSuppressionRule`, `CategorySuppressionRule`, `GeoRestrictionRule`) in `GetRecommendationsUseCase` default `BusinessFilterEngine`, enrich and filter `CuratedFallbackProvider` candidates through `BusinessFilterEngine.filter()` before returning degraded responses in `src/serving/src/application/get-recommendations.use-case.ts` and `src/serving/src/infrastructure/fallback/curated-fallback.provider.ts` (`C7`, `FR-014`, `FR-017`, `SC-006`)
+
+### Point 2: Terraform Infrastructure, ECR Wiring & Security Hardening (`C1`, `C4`, `C6`, `C8`)
+
+- [X] T071 [P] [US1] Provision `aws_ecr_repository` (`${var.project_name}-${var.environment}-serving`, `force_delete = true`, scan on push) in `infra/terraform/modules/ecs_service/main.tf`, update default `container_image` to ECR repository URL in `infra/terraform/modules/ecs_service/variables.tf`, expose `ecr_repository_url` in `infra/terraform/outputs.tf`, and add Docker build/push steps to `.github/workflows/terraform-create.yml` (`C1`, `FR-011`, `FR-020`)
+- [X] T072 [P] [US4] Declare `aws_s3_object` and `aws_glue_job` resources for `publish_batch_dynamodb` (`src/batch/glue/publish_dynamodb.py`) and `publish_memorydb_vectors` (`src/batch/glue/publish_memorydb_vectors.py`) alongside `feature_engineering` in `infra/terraform/modules/glue_pipeline/main.tf` and `infra/terraform/modules/glue_pipeline/outputs.tf` (`C4`, `FR-005`, `FR-007`, `FR-008`)
+- [X] T073 [P] Harden security across Terraform and Serving: replace wildcard `Resource = "*"` IAM policies with explicit resource ARNs (`dynamodb_table_arn`, `sagemaker_endpoint_arn`, `s3_bucket_arn`) in `infra/terraform/modules/ecs_service/main.tf`, `infra/terraform/modules/glue_pipeline/main.tf`, and `infra/terraform/main.tf`; enable `tls_enabled = true` and `aws_memorydb_acl` in `infra/terraform/modules/memorydb_cluster/main.tf`; and implement configurable `x-api-key` authentication middleware (`API_AUTH_TOKEN`) in `src/serving/src/config/env.ts` and `src/serving/src/presentation/server.ts` (`C6`, `FR-011`, `FR-020`)
+
+### Point 3: End-to-End Batch Pipeline Handoff, Glue Risk Mitigation & Behavioral Tests (`C2`, `C4`, `C9`)
+
+- [X] T074 [P] [US4] Refactor `src/batch/glue/feature_engineering.py` to read via `glue_context.create_dynamic_frame.from_catalog(..., transformation_ctx="datasource_interactions")` for Glue Job Bookmark state tracking, apply `F.broadcast(catalog_df)` before joining with `interactions_df` to prevent 2-DPU `G.1X` shuffle OOM, and parameterize S3 bucket/database names via CLI/environment variables (`C2`, `C4`, `FR-005`)
+- [X] T075 [US4] Connect end-to-end batch artifact flow across `src/batch/sagemaker/train_model.py`, `src/batch/glue/publish_dynamodb.py`, `src/batch/glue/publish_memorydb_vectors.py`, and `src/batch/airflow/dags/daily_hybrid_recommendation_pipeline.py` so `train_model.py` consumes engineered features and writes `item_embeddings_128dim.json` + `user_recommendations.json` consumed by the publishers with rate-limited batching, parameterized resource names, and Redis TLS support (`C2`, `C4`, `FR-006`, `FR-007`, `FR-008`)
+- [X] T076 [US4] Replace static string-matching assertions with behavioral execution and contract tests in `tests/integration/test_glue_transformations.py`, `tests/contract/test_dynamodb_publish_contract.py`, and `tests/contract/test_memorydb_vector_contract.py` verifying real function execution, artifact handoff, Job Bookmark `transformation_ctx`, and schema compliance (`C9`, Constitution Principle III)
+
+### Point 4: Post-Remediation Security Audit, GitHub Actions AWS Setup Guide & Reference Architecture Diagram
+
+- [X] T077 Analyze and verify all security controls after implementing `T068`–`T076` (IAM least privilege, VPC isolation, MemoryDB TLS/ACL, S3 KMS encryption, API key auth, and CI/CD secret boundaries) and document the audit matrix in `docs/SECURITY_AUDIT.md` (`C6`)
+- [X] T078 [P] Create comprehensive step-by-step GitHub + AWS connection and CI/CD configuration guide in `docs/GITHUB_AWS_SETUP.md` (covering IAM OIDC provider setup, IAM Role trust policy, Access Key alternative, and complete table of all required GitHub Repository Secrets and Variables) and link from `README.md` (`FR-020`)
+- [X] T079 [P] Create faithful AWS Reference Architecture Diagram and component data-flow documentation in `docs/ARCHITECTURE_DIAGRAM.md` (and update `README.md` / `specs/001-aws-recommendation-platform/spec.md`) modeled on the AWS Big Data Blog reference (*"Building a scalable, personalized recommendation system on AWS: From batch to real-time"*)
+
+

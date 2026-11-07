@@ -11,35 +11,38 @@
 
 The AWS Hybrid Recommendation Platform provides low-latency, personalized e-commerce product recommendations to Amazon.com users by blending offline precomputed batch intelligence with real-time semantic retrieval, dynamic ML scoring, and rigorous business-rule governance.
 
-### Architectural Blueprint (Fixed & Approved)
+### Architectural Blueprint (Fixed & Approved — Aligned with AWS Batch-to-Real-Time Reference)
+
+See [`docs/ARCHITECTURE_DIAGRAM.md`](../../docs/ARCHITECTURE_DIAGRAM.md) for the detailed sequence and component diagrams.
 
 ```mermaid
 flowchart TD
     subgraph Data_Foundation ["Data Foundation & Lake"]
-        S3["Amazon S3\nGolden Dataset"] --> LF["AWS Lake Formation\nGovernance & Access"]
+        S3["Amazon S3\nGolden Dataset (Parquet + SSE-KMS)"] --> LF["AWS Lake Formation\nGovernance & Access"]
         LF --> Athena["Amazon Athena\nCurated Queries"]
     end
 
     subgraph Batch_Layer ["Offline Batch Layer"]
-        Athena --> GlueETL["AWS Glue\nFeature Engineering ETL"]
-        GlueETL --> SageMakerTrain["Amazon SageMaker\nModel & Embedding Training"]
-        SageMakerTrain --> GluePublish["AWS Glue\nRecommendation Publishing"]
-        SageMakerTrain --> GlueEmbed["AWS Glue / Script\nVector Index Publishing"]
+        Athena --> GlueETL["AWS Glue 4.0\nFeature Engineering ETL\n(Job Bookmarks + Broadcast Join)"]
+        GlueETL --> SageMakerTrain["Amazon SageMaker\nSpot Model & Embedding Training"]
+        SageMakerTrain -->|user_recommendations.json| GluePublish["AWS Glue 4.0\nDynamoDB Batch Publisher"]
+        SageMakerTrain -->|item_embeddings_128dim.json| GlueEmbed["AWS Glue 4.0\nMemoryDB Vector Publisher"]
         MWAA["Amazon MWAA\n(Apache Airflow Orchestration)"] -.->|Triggers & Coordinates| GlueETL
         MWAA -.->|Triggers| SageMakerTrain
         MWAA -.->|Triggers| GluePublish
         MWAA -.->|Triggers| GlueEmbed
-        GluePublish --> DynamoDB[("Amazon DynamoDB\nBatch Recs")]
-        GlueEmbed --> MemoryDB[("Amazon MemoryDB\nVector Search Index")]
+        GluePublish --> DynamoDB[("Amazon DynamoDB\nBatch Recs (7d TTL)")]
+        GlueEmbed --> MemoryDB[("Amazon MemoryDB\nVector Search Index (TLS + ACL)")]
     end
 
     subgraph Realtime_Layer ["Real-time Serving Layer"]
         User(["Client / Amazon.com User"]) --> ALB["Application Load Balancer"]
-        ALB --> ECS["Amazon ECS (Fargate)\nRecommendation Service"]
+        ECR["Amazon ECR\n(Fastify Image)"] -.-> ECS["Amazon ECS (Fargate Spot)\nRecommendation Service (x-api-key)"]
+        ALB --> ECS
         ECS -->|1. Fetch Precomputed Recs| DynamoDB
-        ECS -->|2. Query Semantic Candidates| MemoryDB
-        ECS -->|3. Score / Rerank Candidates| SM_Endpoint["Amazon SageMaker\nOnline Inference Endpoint"]
-        ECS -->|4. Business Rules & Deduplication| ECS
+        ECS -->|2. Query 128-dim Session Vector KNN| MemoryDB
+        ECS -->|3. Business Rules (Normal & Fallback) & Deduplication| ECS
+        ECS -->|4. Score / Rerank Eligible Candidates| SM_Endpoint["Amazon SageMaker\nOnline Inference Endpoint"]
         ECS -->|5. Return Ranked Recommendations| User
     end
 ```
