@@ -12,6 +12,7 @@ const envSchema = z.object({
   MEMORYDB_CLUSTER_ENDPOINT: z.string().default('localhost:6379'),
   SAGEMAKER_ENDPOINT_NAME: z.string().default('recommendation-serverless-endpoint'),
   SAGEMAKER_ENDPOINT_URL: z.string().optional(),
+  API_AUTH_TOKEN: z.string().optional(),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
 });
 

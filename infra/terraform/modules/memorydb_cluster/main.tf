@@ -14,9 +14,18 @@ resource "aws_memorydb_parameter_group" "redis7" {
   }
 }
 
+resource "aws_memorydb_acl" "cluster_acl" {
+  name       = "${var.project_name}-${var.environment}-acl"
+  user_names = []
+
+  tags = {
+    Name = "${var.project_name}-${var.environment}-memorydb-acl"
+  }
+}
+
 resource "aws_memorydb_cluster" "vector_cluster" {
   name                   = "${var.project_name}-${var.environment}-vec"
-  acl_name               = "open-access"
+  acl_name               = aws_memorydb_acl.cluster_acl.name
   node_type              = var.node_type
   num_shards             = 1
   num_replicas_per_shard = 0
@@ -25,11 +34,12 @@ resource "aws_memorydb_cluster" "vector_cluster" {
   parameter_group_name   = aws_memorydb_parameter_group.redis7.name
   subnet_group_name      = aws_memorydb_subnet_group.main.name
   security_group_ids     = var.security_group_ids
-  tls_enabled            = false
+  tls_enabled            = true
 
   tags = {
     Name        = "${var.project_name}-${var.environment}-memorydb-vector"
     CostPosture = "Minimum-Cost-PoC"
     Replicas    = "0"
+    TLSEnabled  = "true"
   }
 }

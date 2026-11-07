@@ -12,10 +12,11 @@ import { SageMakerScoringClient } from '../infrastructure/sagemaker/sagemaker-sc
 export interface ServerOptions extends FastifyServerOptions {
   healthCheckers?: DownstreamHealthCheckers;
   recommendationUseCase?: IGetRecommendationsUseCase;
+  apiAuthToken?: string;
 }
 
 export function buildServer(options: ServerOptions = {}): FastifyInstance {
-  const { healthCheckers, recommendationUseCase, ...fastifyOptions } = options;
+  const { healthCheckers, recommendationUseCase, apiAuthToken = env.API_AUTH_TOKEN, ...fastifyOptions } = options;
 
   const app = fastify({
     logger: false, // We use custom structured logging via Pino
@@ -31,7 +32,7 @@ export function buildServer(options: ServerOptions = {}): FastifyInstance {
   });
 
   // Request & response logging hooks
-  app.addHook('onRequest', async (req) => {
+  app.addHook('onRequest', async (req, reply) => {
     baseLogger.info(
       {
         requestId: req.id,
@@ -40,6 +41,17 @@ export function buildServer(options: ServerOptions = {}): FastifyInstance {
       },
       `Incoming request ${req.method} ${req.url}`
     );
+
+    if (apiAuthToken && req.url.startsWith('/v1/')) {
+      const providedKey = req.headers['x-api-key'];
+      if (providedKey !== apiAuthToken) {
+        reply.status(401).send({
+          error: 'Unauthorized',
+          message: 'Missing or invalid x-api-key header.',
+          requestId: req.id,
+        });
+      }
+    }
   });
 
   app.addHook('onResponse', async (req, reply) => {

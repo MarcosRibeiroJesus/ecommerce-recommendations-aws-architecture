@@ -23,6 +23,11 @@ output "ecs_service_alb_dns" {
   value       = module.ecs_service.alb_dns_name
 }
 
+output "ecr_repository_url" {
+  description = "ECR repository URL for the Recommendation Service container image"
+  value       = module.ecs_service.ecr_repository_url
+}
+
 output "athena_workgroup_name" {
   description = "Athena analytical workgroup name"
   value       = module.athena_queries.workgroup_name
@@ -31,6 +36,16 @@ output "athena_workgroup_name" {
 output "glue_job_name" {
   description = "Glue feature engineering job name"
   value       = module.glue_pipeline.glue_job_name
+}
+
+output "glue_publish_dynamodb_job_name" {
+  description = "Glue DynamoDB batch recommendations publisher job name"
+  value       = module.glue_pipeline.publish_dynamodb_job_name
+}
+
+output "glue_publish_memorydb_job_name" {
+  description = "Glue MemoryDB vector publisher job name"
+  value       = module.glue_pipeline.publish_memorydb_job_name
 }
 
 output "sagemaker_train_script_uri" {

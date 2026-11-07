@@ -1,5 +1,26 @@
 data "aws_region" "current" {}
 
+resource "aws_ecr_repository" "app" {
+  name                 = "${var.project_name}-${var.environment}-serving"
+  image_tag_mutability = "MUTABLE"
+  force_delete         = true
+
+  image_scanning_configuration {
+    scan_on_push = true
+  }
+
+  tags = {
+    Name        = "${var.project_name}-${var.environment}-serving-ecr"
+    CostPosture = "Minimum-Cost-PoC"
+  }
+}
+
+locals {
+  effective_container_image = var.container_image != "" ? var.container_image : "${aws_ecr_repository.app.repository_url}:latest"
+  dynamodb_resource_arn     = var.dynamodb_table_arn != "" ? var.dynamodb_table_arn : "arn:aws:dynamodb:${data.aws_region.current.region}:*:table/${var.dynamodb_table_name}"
+  sagemaker_resource_arn    = var.sagemaker_endpoint_arn != "" ? var.sagemaker_endpoint_arn : "arn:aws:sagemaker:${data.aws_region.current.region}:*:endpoint/${var.sagemaker_endpoint_name}"
+}
+
 resource "aws_ecs_cluster" "main" {
   name = "${var.project_name}-${var.environment}-cluster"
 
@@ -66,7 +87,7 @@ resource "aws_iam_role" "ecs_task_role" {
   assume_role_policy = data.aws_iam_policy_document.ecs_assume_role.json
 }
 
-# Task policy for DynamoDB, SageMaker invocation, and CloudWatch
+# Least-privilege task policy scoped to explicit DynamoDB & SageMaker ARNs and CloudWatch namespace
 resource "aws_iam_policy" "ecs_task_policy" {
   name = "${var.project_name}-${var.environment}-ecs-task-policy"
 
@@ -76,17 +97,22 @@ resource "aws_iam_policy" "ecs_task_policy" {
       {
         Effect   = "Allow"
         Action   = ["dynamodb:GetItem", "dynamodb:BatchGetItem"]
-        Resource = "*"
+        Resource = [local.dynamodb_resource_arn]
       },
       {
         Effect   = "Allow"
         Action   = ["sagemaker:InvokeEndpoint"]
-        Resource = "*"
+        Resource = [local.sagemaker_resource_arn]
       },
       {
         Effect   = "Allow"
         Action   = ["cloudwatch:PutMetricData"]
         Resource = "*"
+        Condition = {
+          StringEquals = {
+            "cloudwatch:namespace" = "EcommerceRecommendations"
+          }
+        }
       }
     ]
   })
@@ -157,7 +183,7 @@ resource "aws_ecs_task_definition" "app" {
   container_definitions = jsonencode([
     {
       name      = "recommendation-service"
-      image     = var.container_image
+      image     = local.effective_container_image
       essential = true
       portMappings = [
         {

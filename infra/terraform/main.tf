@@ -22,7 +22,6 @@ provider "aws" {
   }
 }
 
-# Module invocations will be connected as modules are implemented
 module "networking" {
   source       = "./modules/networking"
   project_name = var.project_name
@@ -75,8 +74,10 @@ module "ecs_service" {
   alb_security_group_id     = module.networking.alb_sg_id
   ecs_security_group_id     = module.networking.ecs_sg_id
   dynamodb_table_name       = module.dynamodb_table.table_name
+  dynamodb_table_arn        = module.dynamodb_table.table_arn
   memorydb_cluster_endpoint = module.memorydb_cluster.cluster_endpoint
   sagemaker_endpoint_name   = module.sagemaker_endpoint.endpoint_name
+  sagemaker_endpoint_arn    = module.sagemaker_endpoint.endpoint_arn
 }
 
 module "athena_queries" {
@@ -88,10 +89,14 @@ module "athena_queries" {
 }
 
 module "glue_pipeline" {
-  source            = "./modules/glue_pipeline"
-  project_name      = var.project_name
-  environment       = var.environment
-  s3_scripts_bucket = module.s3_golden_dataset.bucket_name
+  source                    = "./modules/glue_pipeline"
+  project_name              = var.project_name
+  environment               = var.environment
+  s3_scripts_bucket         = module.s3_golden_dataset.bucket_name
+  s3_bucket_arn             = module.s3_golden_dataset.bucket_arn
+  dynamodb_table_name       = module.dynamodb_table.table_name
+  dynamodb_table_arn        = module.dynamodb_table.table_arn
+  memorydb_cluster_endpoint = module.memorydb_cluster.cluster_endpoint
 }
 
 module "sagemaker_training" {
