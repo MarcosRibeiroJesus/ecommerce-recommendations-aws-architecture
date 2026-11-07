@@ -1,0 +1,74 @@
+name: Ephemeral Cloud Teardown (Terraform Destroy)
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Deployment posture environment to tear down'
+        required: true
+        default: 'poc'
+        type: choice
+        options:
+          - poc
+          - dev
+      confirm_destruction:
+        description: 'Type "DESTROY" to confirm complete cloud teardown'
+        required: true
+        type: string
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  terraform_destroy:
+    name: Terraform Destruction
+    runs-on: ubuntu-latest
+    env:
+      AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+    defaults:
+      run:
+        working-directory: infra/terraform
+
+    steps:
+      - name: Verify Destruction Confirmation
+        run: |
+          if [ "${{ github.event.inputs.confirm_destruction }}" != "DESTROY" ]; then
+            echo "Destruction confirmation mismatch. Aborting."
+            exit 1
+          fi
+
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials (OIDC Role)
+        if: env.AWS_ROLE_ARN != ''
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ${{ secrets.AWS_REGION || 'us-east-1' }}
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+
+      - name: Configure AWS Credentials (IAM Access Keys)
+        if: env.AWS_ROLE_ARN == '' && env.AWS_ACCESS_KEY_ID != ''
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ${{ secrets.AWS_REGION || 'us-east-1' }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.8.0
+
+      - name: Terraform Init
+        run: terraform init
+
+      - name: Terraform Destroy
+        run: |
+          terraform destroy -auto-approve \
+            -var="aws_region=${{ secrets.AWS_REGION || 'us-east-1' }}" \
+            -var="project_name=${{ vars.PROJECT_NAME || 'ecommerce-recommendations' }}" \
+            -var="environment=${{ github.event.inputs.environment }}" \
+            -var="force_destroy=true"

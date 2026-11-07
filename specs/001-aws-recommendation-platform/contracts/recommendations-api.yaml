@@ -1,0 +1,204 @@
+openapi: 3.0.3
+info:
+  title: AWS Hybrid Recommendation Service API
+  description: Low-latency REST API providing personalized product recommendations combining offline batch precomputations, real-time vector retrieval, and online ML re-ranking.
+  version: 1.0.0
+servers:
+  - url: http://localhost:8080
+    description: Local development / test harness
+  - url: https://recommendations.internal.amazon.com
+    description: AWS ECS Application Load Balancer
+
+paths:
+  /v1/recommendations:
+    get:
+      summary: Retrieve personalized product recommendations
+      description: Orchestrates parallel candidate retrieval from DynamoDB and MemoryDB, deduplicates candidates, filters out ineligible/out-of-stock items, scores candidates via SageMaker Serverless Inference, and returns Top-N ranked items.
+      operationId: getRecommendations
+      parameters:
+        - name: userId
+          in: query
+          required: true
+          description: Unique customer identifier.
+          schema:
+            type: string
+            example: "u-12345"
+            pattern: '^[a-zA-Z0-9_\-]+$'
+        - name: limit
+          in: query
+          required: false
+          description: Number of recommendations to return (default 10, max 50).
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 50
+            default: 10
+        - name: category
+          in: query
+          required: false
+          description: Optional category taxonomy filter for candidate retrieval.
+          schema:
+            type: string
+            example: "Electronics"
+        - name: sessionItemIds
+          in: query
+          required: false
+          description: Comma-separated list of recent in-session product IDs to bias real-time semantic retrieval.
+          schema:
+            type: string
+            example: "SKU-1001,SKU-1002"
+      responses:
+        '200':
+          description: Successfully retrieved personalized recommendations.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecommendationResponse'
+        '400':
+          description: Bad request (invalid parameters or failed validation).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error (only returned if catastrophic failure occurs without fallback).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /health:
+    get:
+      summary: Service health check
+      description: Returns health status of the ECS container and connectivity states to DynamoDB, MemoryDB, and SageMaker.
+      operationId: getHealth
+      responses:
+        '200':
+          description: Service is healthy.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+        '503':
+          description: Service unhealthy.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+
+components:
+  schemas:
+    RecommendationResponse:
+      type: object
+      required:
+        - requestId
+        - userId
+        - timestamp
+        - recommendations
+        - degradedMode
+        - executionDurationMs
+      properties:
+        requestId:
+          type: string
+          example: "req-9876543210"
+        userId:
+          type: string
+          example: "u-12345"
+        timestamp:
+          type: string
+          format: date-time
+          example: "2026-11-04T03:00:00Z"
+        degradedMode:
+          type: boolean
+          description: True if real-time scoring or vector retrieval failed and response degraded to batch or fallback.
+          example: false
+        executionDurationMs:
+          type: integer
+          description: Total request processing time in milliseconds.
+          example: 42
+        recommendations:
+          type: array
+          items:
+            $ref: '#/components/schemas/RecommendedItem'
+
+    RecommendedItem:
+      type: object
+      required:
+        - itemId
+        - rank
+        - score
+        - provenance
+        - title
+        - priceCents
+      properties:
+        itemId:
+          type: string
+          example: "SKU-9021"
+        rank:
+          type: integer
+          minimum: 1
+          example: 1
+        score:
+          type: number
+          format: float
+          description: Normalized final relevance score [0.0 - 1.0].
+          example: 0.945
+        provenance:
+          type: string
+          enum: [batch, realtime, hybrid, fallback]
+          description: Source origin of the recommendation.
+          example: "hybrid"
+        title:
+          type: string
+          example: "Wireless Noise-Canceling Over-Ear Headphones"
+        priceCents:
+          type: integer
+          description: Item price in cents.
+          example: 19999
+        category:
+          type: string
+          example: "Electronics > Audio > Headphones"
+
+    HealthResponse:
+      type: object
+      required:
+        - status
+        - timestamp
+        - downstream
+      properties:
+        status:
+          type: string
+          enum: [UP, DEGRADED, DOWN]
+          example: "UP"
+        timestamp:
+          type: string
+          format: date-time
+        downstream:
+          type: object
+          properties:
+            dynamoDb:
+              type: string
+              enum: [CONNECTED, DEGRADED, UNREACHABLE]
+            memoryDb:
+              type: string
+              enum: [CONNECTED, DEGRADED, UNREACHABLE]
+            sageMaker:
+              type: string
+              enum: [CONNECTED, DEGRADED, UNREACHABLE]
+
+    ErrorResponse:
+      type: object
+      required:
+        - error
+        - message
+        - requestId
+      properties:
+        error:
+          type: string
+          example: "Bad Request"
+        message:
+          type: string
+          example: "Parameter 'userId' is required and must match pattern '^[a-zA-Z0-9_-]+$'."
+        requestId:
+          type: string
+          example: "req-err-12345"

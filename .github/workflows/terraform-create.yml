@@ -1,0 +1,87 @@
+name: Ephemeral Cloud Provision (Terraform Create)
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Deployment posture environment'
+        required: true
+        default: 'poc'
+        type: choice
+        options:
+          - poc
+          - dev
+      enable_serverless_inference:
+        description: 'Deploy SageMaker Serverless Inference ($0 idle cost)'
+        required: true
+        default: true
+        type: boolean
+      enable_mwaa:
+        description: 'Enable MWAA Environment (High Cost: 71.2% / $447.90/mo baseline)'
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  terraform_apply:
+    name: Terraform Provisioning & Container Deployment
+    runs-on: ubuntu-latest
+    env:
+      AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials (OIDC Role)
+        if: env.AWS_ROLE_ARN != ''
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ${{ secrets.AWS_REGION || 'us-east-1' }}
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+
+      - name: Configure AWS Credentials (IAM Access Keys)
+        if: env.AWS_ROLE_ARN == '' && env.AWS_ACCESS_KEY_ID != ''
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ${{ secrets.AWS_REGION || 'us-east-1' }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.8.0
+          terraform_wrapper: false
+
+      - name: Terraform Init & Validate
+        working-directory: infra/terraform
+        run: |
+          terraform init
+          terraform validate
+
+      - name: Terraform Apply Infrastructure
+        working-directory: infra/terraform
+        run: |
+          terraform apply -auto-approve \
+            -var="aws_region=${{ secrets.AWS_REGION || 'us-east-1' }}" \
+            -var="project_name=${{ vars.PROJECT_NAME || 'ecommerce-recommendations' }}" \
+            -var="environment=${{ github.event.inputs.environment }}" \
+            -var="enable_serverless_inference=${{ github.event.inputs.enable_serverless_inference }}" \
+            -var="enable_mwaa=${{ github.event.inputs.enable_mwaa }}" \
+            -var="force_destroy=true"
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and Push Recommendation Service Image to ECR
+        run: |
+          ECR_URL=$(terraform -chdir=infra/terraform output -raw ecr_repository_url)
+          docker build -t "$ECR_URL:latest" -f src/serving/Dockerfile .
+          docker push "$ECR_URL:latest"

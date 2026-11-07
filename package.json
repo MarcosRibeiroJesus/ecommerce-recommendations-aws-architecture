@@ -1,0 +1,32 @@
+{
+  "name": "ecommerce-recommendations-aws-architecture",
+  "version": "1.0.0",
+  "private": true,
+  "description": "AWS Hybrid Recommendation Platform combining offline batch and real-time semantic retrieval",
+  "workspaces": [
+    "src/serving"
+  ],
+  "scripts": {
+    "build": "npm run build --workspace=src/serving",
+    "start": "npm run start --workspace=src/serving",
+    "dev": "npm run dev --workspace=src/serving",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "lint": "eslint . --ext .ts",
+    "format": "prettier --write .",
+    "seed:local": "tsx scripts/seed-local.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^20.12.7",
+    "@types/supertest": "^6.0.2",
+    "@typescript-eslint/eslint-plugin": "^7.8.0",
+    "@typescript-eslint/parser": "^7.8.0",
+    "eslint": "^8.57.0",
+    "prettier": "^3.2.5",
+    "supertest": "^7.0.0",
+    "tsx": "^4.10.0",
+    "typescript": "^5.4.5",
+    "vitest": "^1.6.0"
+  }
+}
